@@ -41,6 +41,7 @@ class ModelBase(type):
         else:
             meta = attr_meta
         base_meta = getattr(new_class, '_meta', None)
+        has_concrete_parent = False
 
         if getattr(meta, 'app_label', None) is None:
             # Figure out the app_label by looking one level up.
@@ -131,6 +132,9 @@ class ModelBase(type):
                 # uninteresting parents.
                 continue
 
+            if base._meta.has_concrete_parent:
+                has_concrete_parent = True
+
             parent_fields = base._meta.local_fields + base._meta.local_many_to_many
             # Check for clashes between locally declared fields and those
             # on the base classes (we cannot handle shadowed fields at the
@@ -141,8 +145,12 @@ class ModelBase(type):
                                      'with field of similar name from '
                                      'base class %r' %
                                         (field.name, name, base.__name__))
+
             if not base._meta.abstract:
                 # Concrete classes...
+
+                has_concrete_parent = True
+
                 while base._meta.proxy:
                     # Skip over a proxy class to the "real" base it proxies.
                     base = base._meta.proxy_for_model
@@ -181,6 +189,9 @@ class ModelBase(type):
                                      'abstract base class %r' % \
                                         (field.name, name, base.__name__))
                 new_class.add_to_class(field.name, copy.deepcopy(field))
+
+        # TODO: GAE: Emulate multi-table inheritance with PolyModel principle
+        new_class._meta.has_concrete_parent = has_concrete_parent
 
         if abstract:
             # Abstract base models can't be instantiated and don't appear in
@@ -447,6 +458,7 @@ class Model(object):
         connection = connections[using]
         assert not (force_insert and force_update)
         if cls is None:
+            self._meta.check_supported(connection)
             cls = self.__class__
             meta = cls._meta
             if not meta.proxy:
@@ -490,7 +502,18 @@ class Model(object):
             pk_set = pk_val is not None
             record_exists = True
             manager = cls._base_manager
-            if pk_set:
+            # TODO: GAE: The App Engine backend could emulate force_insert/_update with a
+            # transaction, but since it's costly we should only do it when the user explicitly
+            # wants it.
+            # By adding support for a blocking @commit_locked transaction (SELECT ... FOR UPDATE)
+            # we could even make that part fully reusable on all backends (the current .exists()
+            # check below isn't really safe if you have lots of concurrent requests.
+            # BTW, and neither is QuerySet.get_or_create).
+            try_update = connection.features.distinguishes_insert_from_update
+            if not try_update:
+                record_exists = False
+
+            if try_update and pk_set:
                 # Determine whether a record with the primary key already exists.
                 if (force_update or (not force_insert and
                         manager.using(using).filter(pk=pk_val).exists())):
@@ -539,7 +562,7 @@ class Model(object):
 
     save_base.alters_data = True
 
-    def _collect_sub_objects(self, seen_objs, parent=None, nullable=False):
+    def _collect_sub_objects(self, seen_objs, connection, parent=None, nullable=False):
         """
         Recursively populates seen_objs with all objects related to this
         object.
@@ -553,6 +576,10 @@ class Model(object):
                          type(parent), parent, nullable):
             return
 
+        if not connection.features.supports_deleting_related_objects:
+            # TODO: GAE: support deleting related objects in background task
+            return
+
         for related in self._meta.get_all_related_objects():
             rel_opts_name = related.get_accessor_name()
             if isinstance(related.field.rel, OneToOneRel):
@@ -561,7 +588,7 @@ class Model(object):
                 except ObjectDoesNotExist:
                     pass
                 else:
-                    sub_obj._collect_sub_objects(seen_objs, self, related.field.null)
+                    sub_obj._collect_sub_objects(seen_objs, connection, self, related.field.null)
             else:
                 # To make sure we can access all elements, we can't use the
                 # normal manager on the related object. So we work directly
@@ -579,7 +606,7 @@ class Model(object):
                         continue
                 delete_qs = rel_descriptor.delete_manager(self).all()
                 for sub_obj in delete_qs:
-                    sub_obj._collect_sub_objects(seen_objs, self, related.field.null)
+                    sub_obj._collect_sub_objects(seen_objs, connection, self, related.field.null)
 
         # Handle any ancestors (for the model-inheritance case). We do this by
         # traversing to the most remote parent classes -- those with no parents
@@ -594,7 +621,7 @@ class Model(object):
                 continue
             # At this point, parent_obj is base class (no ancestor models). So
             # delete it and all its descendents.
-            parent_obj._collect_sub_objects(seen_objs)
+            parent_obj._collect_sub_objects(seen_objs, connection)
 
     def delete(self, using=None):
         using = using or router.db_for_write(self.__class__, instance=self)
@@ -603,7 +630,7 @@ class Model(object):
 
         # Find all the objects than need to be deleted.
         seen_objs = CollectedObjects()
-        self._collect_sub_objects(seen_objs)
+        self._collect_sub_objects(seen_objs, connection)
 
         # Actually delete the objects.
         delete_objects(seen_objs, using)
