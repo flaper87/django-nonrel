@@ -1386,6 +1386,14 @@ class AdminActionsTest(TestCase):
         self.assert_('action-checkbox-column' not in response.content,
             "Found unexpected action-checkbox-column class in response")
 
+    def test_model_without_action_still_has_jquery(self):
+        "Tests that a ModelAdmin without any actions still gets jQuery included in page"
+        response = self.client.get('/test_admin/admin/admin_views/oldsubscriber/')
+        self.assertEquals(response.context["action_form"], None)
+        self.assert_('jquery.min.js' in response.content,
+            "jQuery missing from admin pages for model with no admin actions"
+        )
+
     def test_action_column_class(self):
         "Tests that the checkbox column class is present in the response"
         response = self.client.get('/test_admin/admin/admin_views/subscriber/')
@@ -1443,7 +1451,7 @@ class AdminActionsTest(TestCase):
         Check if the selection counter is there.
         """
         response = self.client.get('/test_admin/admin/admin_views/subscriber/')
-        self.assertContains(response, '<span class="_acnt">0</span> of 2 selected')
+        self.assertContains(response, '0 of 2 selected')
 
 
 class TestCustomChangeList(TestCase):
