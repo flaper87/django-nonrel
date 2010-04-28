@@ -30,6 +30,20 @@ class Child(models.Model):
     def __unicode__(self):
         return u'I am %s, a child of %s' % (self.name, self.parent)
 
+class Book(models.Model):
+    name = models.CharField(max_length=50)
+
+class Author(models.Model):
+    name = models.CharField(max_length=50)
+    books = models.ManyToManyField(Book)
+
+class BookInline(admin.TabularInline):
+    model = Author.books.through
+
+class AuthorAdmin(admin.ModelAdmin):
+    inlines = [BookInline]
+
+admin.site.register(Author, AuthorAdmin)
 
 class Holder(models.Model):
     dummy = models.IntegerField()
@@ -87,6 +101,29 @@ admin.site.register(Holder, HolderAdmin, inlines=[InnerInline])
 admin.site.register(Holder2, HolderAdmin, inlines=[InnerInline2])
 # only Inline media
 admin.site.register(Holder3, inlines=[InnerInline3])
+
+# Models for #12749
+
+class Person(models.Model):
+    firstname = models.CharField(max_length=15)
+
+class OutfitItem(models.Model):
+    name = models.CharField(max_length=15)
+
+class Fashionista(models.Model):
+    person = models.OneToOneField(Person, primary_key=True)
+    weaknesses = models.ManyToManyField(OutfitItem, through='ShoppingWeakness', blank=True)
+
+class ShoppingWeakness(models.Model):
+    fashionista = models.ForeignKey(Fashionista)
+    item = models.ForeignKey(OutfitItem)
+
+class InlineWeakness(admin.TabularInline):
+    model = ShoppingWeakness
+    extra = 1
+
+admin.site.register(Fashionista, inlines=[InlineWeakness])
+
 
 __test__ = {'API_TESTS': """
 
