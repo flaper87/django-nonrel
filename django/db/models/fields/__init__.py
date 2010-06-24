@@ -452,11 +452,11 @@ class Field(object):
         return getattr(obj, self.attname)
 
 class AutoField(Field):
-    description = _("Integer")
+    description = _("Integer or string")
 
     empty_strings_allowed = False
     default_error_messages = {
-        'invalid': _(u'This value must be an integer.'),
+        'invalid': _(u'This value must be an integer or string.'),
     }
     def __init__(self, *args, **kwargs):
         assert kwargs.get('primary_key', False) is True, "%ss must have primary_key=True." % self.__class__.__name__
@@ -479,12 +479,17 @@ class AutoField(Field):
         pass
 
     def get_prep_value(self, value):
+        if value is None:
+            return None
         return value
 
     def get_db_prep_value(self, value, connection, prepared=False):
         # Casts AutoField into the format expected by the backend
+        from django.db import connections
         if not prepared:
             value = self.get_prep_value(value)
+        if connection.alias != self.model.objects.db:
+            connection = connections[self.model.objects.db]
         return connection.ops.value_to_db_auto(value)
 
     def contribute_to_class(self, cls, name):

@@ -851,8 +851,13 @@ class ForeignKey(RelatedField, Field):
         if value == '' or value == None:
             return None
         else:
-            return self.rel.get_related_field().get_db_prep_save(value,
-                connection=connection)
+            if connection.alias!=self.rel.to.objects.db:
+                #Cross database management
+                #TODO: check also engine name?
+                return value
+            else:
+                return self.rel.get_related_field().get_db_prep_save(value,
+                    connection=connection)
 
     def value_to_string(self, obj):
         if not obj:
